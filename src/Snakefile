@@ -1,0 +1,130 @@
+import os
+import shutil
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv("../.env")
+BASE_DOWNLOAD_DIR = os.getenv("BASE_DOWNLOAD_DIR", "downloads")
+DATASET_DIR = os.getenv("DATASET_DIR", "dataset")
+PARQUET_PATH = Path(f"{DATASET_DIR}.parquet")
+
+rule all:
+    input:
+        "Trash/cleanup.log",
+        os.path.join("..", os.path.basename(str(PARQUET_PATH)))
+
+rule download_images:
+    input:
+        "keywords.txt",
+        "../.env"
+    output:
+        "downloads.csv",
+        "progress.json",
+        directory(BASE_DOWNLOAD_DIR)
+    shell:
+        "python ImageDownloader.py"
+
+rule clean_data:
+    input:
+        BASE_DOWNLOAD_DIR,
+        "downloads.csv"
+    output:
+        "clean_data.log" 
+    shell:
+        "python DataCleaner.py > clean_data.log" 
+
+rule select_images:
+    input:
+        "clean_data.log"
+    output:
+        "selected_images.csv"
+    message:
+        "Opening GUI for image selection. Pipeline is paused until you save and close the window."
+    shell:
+        "python ImageSelector.py"
+
+rule move_files:
+    input:
+        "selected_images.csv"
+    output:
+        "moved_files.log"
+    shell:
+        "python MoveFiles.py > moved_files.log"
+
+rule create_metadata:
+    input:
+        "moved_files.log"
+    output:
+        "metadata.csv"
+    shell:
+        "python MetadataCreator.py"
+
+rule build_dataset:
+    input:
+        "metadata.csv"
+    output:
+        PARQUET_PATH
+    shell:
+        "python DatasetCreator.py"
+
+rule view_dataset:
+    input:
+        PARQUET_PATH
+    output:
+        "viewed_dataset.log"
+    message:
+        "Opening GUI for Dataset Viewing. Pipeline is paused until you save and close the window."
+    shell:
+        "python DatasetViewer.py > viewed_dataset.log"
+
+rule export_dataset:
+    input:
+        PARQUET_PATH,
+        "viewed_dataset.log"
+    output:
+        os.path.join("..", os.path.basename(str(PARQUET_PATH)))
+    run:
+        shutil.copy(input[0], output[0])
+
+rule cleanup:
+    input:
+        PARQUET_PATH,
+        "viewed_dataset.log"  
+    output:
+        "Trash/cleanup.log"
+    params:
+        dl_dir=BASE_DOWNLOAD_DIR,
+        ds_dir=DATASET_DIR,
+        do_dir="output"
+    run:
+        os.makedirs("Trash", exist_ok=True)
+
+        files_to_move = [
+            "downloads.csv",
+            "progress.json",
+            "metadata.csv",
+            "selected_images.csv",
+            "clean_data.log",
+            "processed_characters.csv",  
+            "moved_files.log",
+            "viewed_dataset.log"
+        ]
+
+        for f in files_to_move:
+            if os.path.exists(f):
+                dest = os.path.join("Trash", f)
+                if os.path.exists(dest):
+                    os.remove(dest)
+                shutil.move(f, dest)
+
+        dirs_to_move = [params.dl_dir, params.ds_dir, params.do_dir]
+
+        for d in dirs_to_move:
+            if os.path.exists(d):
+                dest_dir = os.path.join("Trash", os.path.basename(d))
+                if os.path.exists(dest_dir):
+                    shutil.rmtree(dest_dir)
+                shutil.move(d, "Trash/")
+
+        with open(output[0], "w") as log_file:
+            log_file.write("Cleanup completed successfully.\n")
