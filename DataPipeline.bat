@@ -2,6 +2,7 @@
 
 echo === Setting up environment ===
 pip install -r requirements.txt
+playwright install chromium
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 echo === Opening .env file ===
