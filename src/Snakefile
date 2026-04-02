@@ -10,9 +10,7 @@ PARQUET_PATH = Path(f"{DATASET_DIR}.parquet")
 
 rule all:
     input:
-        "Trash/cleanup.log",
-        os.path.join("..", os.path.basename(str(PARQUET_PATH)))
-
+        "Trash/cleanup.log"
 rule download_images:
     input:
         "keywords.txt",
@@ -29,9 +27,9 @@ rule clean_data:
         BASE_DOWNLOAD_DIR,
         "downloads.csv"
     output:
-        "clean_data.log" 
+        "clean_data.log"
     shell:
-        "python DataCleaner.py > clean_data.log" 
+        "python DataCleaner.py > clean_data.log"
 
 rule select_images:
     input:
@@ -88,8 +86,8 @@ rule export_dataset:
 
 rule cleanup:
     input:
-        PARQUET_PATH,
-        "viewed_dataset.log"  
+        os.path.join("..", os.path.basename(str(PARQUET_PATH))),
+        "viewed_dataset.log"
     output:
         "Trash/cleanup.log"
     params:
@@ -98,33 +96,28 @@ rule cleanup:
         do_dir="output"
     run:
         os.makedirs("Trash", exist_ok=True)
-
         files_to_move = [
             "downloads.csv",
             "progress.json",
             "metadata.csv",
             "selected_images.csv",
             "clean_data.log",
-            "processed_characters.csv",  
+            "processed_characters.csv",
             "moved_files.log",
             "viewed_dataset.log"
         ]
-
         for f in files_to_move:
             if os.path.exists(f):
                 dest = os.path.join("Trash", f)
                 if os.path.exists(dest):
                     os.remove(dest)
                 shutil.move(f, dest)
-
         dirs_to_move = [params.dl_dir, params.ds_dir, params.do_dir]
-
         for d in dirs_to_move:
             if os.path.exists(d):
                 dest_dir = os.path.join("Trash", os.path.basename(d))
                 if os.path.exists(dest_dir):
                     shutil.rmtree(dest_dir)
                 shutil.move(d, "Trash/")
-
         with open(output[0], "w") as log_file:
             log_file.write("Cleanup completed successfully.\n")
