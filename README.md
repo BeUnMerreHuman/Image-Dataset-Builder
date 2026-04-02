@@ -15,29 +15,17 @@ An end-to-end workflow designed to scrape, curate, and package high-quality imag
 
 ## 🚀 Quick Start
 
-### 1. Installation
+The entire process is automated via a batch script for Windows users:
 
 ```bash
 git clone https://github.com/BeUnMerreHuman/Image-Dataset-Builder.git
 cd Image-Dataset-Builder
-
-```
-
-### 2. Virtual Environment
-
-Setup and activate the Virtual Environment
-
-### 3. Run the Pipeline
-
-The entire process is automated via a batch script for Windows users:
-
-```bash
 .\DataPipeline.bat
 
 ```
 
 > [!IMPORTANT]
-> The pipeline will automatically open `.env` and `keywords.txt` on every run. Edit and **Save and close** these files to allow the automation to proceed to the scraping phase.
+> The pipeline will automatically create and open `.env` and `keywords.txt` on every run. Edit and **Save and close** these files to allow the automation to proceed to the scraping phase.
 
 ---
 
