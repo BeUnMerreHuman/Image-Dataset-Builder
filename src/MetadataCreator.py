@@ -60,7 +60,7 @@ def match_images_to_csv(image_dir, csv_input, output_csv):
 
                             seen_filenames.add(filename)
                             new_matched_records.append({
-                                'character': image_map[filename]['character'],
+                                'label': image_map[filename]['character'],
                                 'image_path': resolved_path,
                                 'image_url': row.get('image_url', ''),
                                 'timestamp': row.get('timestamp', '')
@@ -81,7 +81,7 @@ def match_images_to_csv(image_dir, csv_input, output_csv):
 
     try:
         with open(output_csv, mode='a', newline='', encoding='utf-8') as f:
-            fieldnames = ['character', 'image_path', 'image_url', 'timestamp']
+            fieldnames = ['label', 'image_path', 'image_url', 'timestamp']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             
             if not file_exists_and_not_empty:
