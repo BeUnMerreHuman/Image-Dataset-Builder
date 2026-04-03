@@ -85,7 +85,7 @@ def build_dataset(csv_path, output_path, master_path):
             new_rows.append({
                 'image': img_bytes,
                 'id': img_id,
-                'label': row['character'],
+                'label': row['label'],
                 'url': row['image_url'],
                 'timestamp': row['timestamp']
             })
