@@ -57,9 +57,21 @@ rule create_metadata:
     shell:
         "python MetadataCreator.py"
 
+rule edit_labels:
+    input:
+        "metadata.csv",
+        "moved_files.log"
+    output:
+        "edited_labels.log"
+    message:
+        "Opening GUI for label editing. Pipeline is paused until you save and close the window."
+    shell:
+        "python LabelEditor.py > edited_labels.log"
+
 rule build_dataset:
     input:
-        "metadata.csv"
+        "metadata.csv",
+        "edited_labels.log"
     output:
         PARQUET_PATH
     shell:
@@ -104,6 +116,7 @@ rule cleanup:
             "clean_data.log",
             "processed_characters.csv",
             "moved_files.log",
+            "edited_labels.log",
             "viewed_dataset.log"
         ]
         for f in files_to_move:
