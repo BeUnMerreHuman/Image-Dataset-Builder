@@ -15,7 +15,7 @@ An end-to-end workflow designed to scrape, curate, and package high-quality imag
 
 ## 🚀 Quick Start
 
-The entire process is automated via a batch script for Windows users:
+The entire process is automated via a batch script for Windows users, You can simply double click `DataPipeline.bat` or run the following Terminal commands:
 
 ```bash
 git clone https://github.com/BeUnMerreHuman/Image-Dataset-Builder.git
@@ -39,6 +39,7 @@ cd Image-Dataset-Builder
 │   ├── ImageSelector.py    # PyQt6 GUI for manual curation
 │   ├── DataCleaner.py      # Filters low-quality & duplicate images
 │   ├── MetadataCreator.py  # Generates image metadata & source links
+│   ├── LabelEditor.py      # Edit the image label
 │   ├── DatasetCreator.py   # Compiles data into final Parquet format
 │   ├── DatasetViewer.py    # Final GUI for dataset verification
 │   ├── MoveFiles.py        # Utility for file organization/staging
