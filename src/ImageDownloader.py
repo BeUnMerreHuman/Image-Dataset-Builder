@@ -1,43 +1,31 @@
-# ---------------------------------------------------------------------------
-# Standard library
-# ---------------------------------------------------------------------------
 import os
 import csv
 import json
 import time
 import base64
+import random
+import threading
 import requests
+import concurrent.futures
 from pathlib import Path
 from urllib.parse import urlparse, quote
-
-# ---------------------------------------------------------------------------
-# Third-party
-# ---------------------------------------------------------------------------
 import xxhash
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-# botasaurus  — for Yandex browser automation
-from botasaurus.browser import browser, Driver
-
-# Playwright (sync) — for Pinterest browser automation
 try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-    PLAYWRIGHT_AVAILABLE = True
+    from camoufox.sync_api import Camoufox
+    CAMOUFOX_AVAILABLE = True
 except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-    print("WARNING: Playwright not installed. Pinterest scraping will be skipped.")
-    print("  Install with: pip install playwright && playwright install chromium")
-
-# ---------------------------------------------------------------------------
-# Load .env
-# ---------------------------------------------------------------------------
-load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
-
+    CAMOUFOX_AVAILABLE = False
+    print("WARNING: camoufox not installed. Both Yandex and Pinterest scraping will be skipped.")
+    print("  Install with: pip install camoufox[geoip] && python -m camoufox fetch")
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 class Config:
     KEYWORDS_FILE                = "keywords.txt"
@@ -49,7 +37,7 @@ class Config:
     MAX_RETRIES             = int(os.getenv("MAX_RETRIES", 3))
     MAX_SCROLLS             = int(os.getenv("MAX_SCROLLS", 30))
     DELAY_BETWEEN_KEYWORDS  = float(os.getenv("DELAY_BETWEEN_KEYWORDS", 3))
-    DELAY_BETWEEN_DOWNLOADS = float(os.getenv("DELAY_BETWEEN_DOWNLOADS", 0.5))
+    MAX_CONCURRENT_DOWNLOADS = 10 # Hardcoded to 10 as requested
 
     BLACKLISTED_DOMAINS = {
         "telegram-cdn.org", "telegram.org", "t.me", "cdn.telegram",
@@ -67,7 +55,6 @@ def sanitize_folder(keyword: str) -> str:
     s = "".join(c if c.isalnum() or c in (" ", "-", "_") else "" for c in keyword)
     return s.replace(" ", "_") or "unnamed"
 
-
 def get_extension(url: str) -> str:
     path = urlparse(url).path.lower()
     for ext in Config.VALID_EXTENSIONS:
@@ -75,12 +62,10 @@ def get_extension(url: str) -> str:
             return ext
     return ".jpg"
 
-
 def xxh64_filename(content: bytes, ext: str) -> str:
     digest_bytes = xxhash.xxh64(content).intdigest().to_bytes(8, "big")
     b64 = base64.urlsafe_b64encode(digest_bytes).decode("ascii").rstrip("=")
     return f"{b64}{ext}"
-
 
 def count_existing(folder: str) -> int:
     if not os.path.exists(folder):
@@ -90,7 +75,6 @@ def count_existing(folder: str) -> int:
         if os.path.isfile(os.path.join(folder, fn))
         and os.path.getsize(os.path.join(folder, fn)) > 1000
     )
-
 
 def is_valid_image_url(url: str) -> bool:
     if not url or not url.startswith("http"):
@@ -108,7 +92,6 @@ def is_valid_image_url(url: str) -> bool:
     except Exception:
         return False
 
-
 def read_keywords(path: str) -> list:
     if not os.path.exists(path):
         print(f"[Error] Keywords file '{path}' not found.")
@@ -118,13 +101,14 @@ def read_keywords(path: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Unified CSV / Progress logger  (one file for both sources)
+# Unified CSV / Progress logger (NOW THREAD-SAFE)
 # ---------------------------------------------------------------------------
 
 class RunLogger:
     def __init__(self):
         self.progress_file = "progress.json"
         self.csv_file      = "downloads.csv"
+        self.lock          = threading.Lock() # Critical for multithreading
         self.progress      = self._load_progress()
         self._init_csv()
 
@@ -133,7 +117,7 @@ class RunLogger:
             with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    "keyword", "source", "image_number", "image_path", 
+                    "keyword", "source", "image_number", "image_path",
                     "image_url", "domain", "status", "timestamp"
                 ])
 
@@ -144,44 +128,39 @@ class RunLogger:
         return {}
 
     def save_progress(self):
-        with open(self.progress_file, "w") as f:
-            json.dump(self.progress, f, indent=2)
-
+        with self.lock:
+            with open(self.progress_file, "w") as f:
+                json.dump(self.progress, f, indent=2)
 
     def log(self, keyword, source, image_number, image_path, image_url, status):
         try:
             domain = urlparse(image_url).netloc
         except Exception:
             domain = "unknown"
-        with open(self.csv_file, "a", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow([
-                keyword, source, image_number, image_path, image_url,
-                domain, status, time.strftime("%Y-%m-%d %H:%M:%S"),
-            ])
+            
+        with self.lock:
+            with open(self.csv_file, "a", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow([
+                    keyword, source, image_number, image_path, image_url,
+                    domain, status, time.strftime("%Y-%m-%d %H:%M:%S"),
+                ])
 
     def get_progress_key(self, keyword, source):
         return f"{source}::{keyword}"
 
 
 # ---------------------------------------------------------------------------
-# Image downloader — plain requests, sequential
+# Image downloader
 # ---------------------------------------------------------------------------
 
-def download_image(url: str, folder: str, ext: str,
-                   referer: str = "https://www.google.com/") -> tuple:
-    """
-    Download one image. Returns (final_path, content) on success,
-    (None, None) on failure. Deduplicates via xxh64 hash filename.
-    """
+def download_image(url: str, folder: str, ext: str, referer: str = "https://www.google.com/") -> tuple:
     for attempt in range(Config.MAX_RETRIES):
         try:
             resp = requests.get(
                 url,
                 timeout=15,
                 headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                  "Chrome/124.0 Safari/537.36",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
                     "Referer": referer,
                 },
                 stream=True,
@@ -193,7 +172,7 @@ def download_image(url: str, folder: str, ext: str,
                     final_name = xxh64_filename(content, ext)
                     final_path = os.path.join(folder, final_name)
                     if os.path.exists(final_path):
-                        return final_path, content      
+                        return final_path, content
                     os.makedirs(folder, exist_ok=True)
                     with open(final_path, "wb") as fh:
                         fh.write(content)
@@ -212,7 +191,56 @@ def download_image(url: str, folder: str, ext: str,
 
 
 # ---------------------------------------------------------------------------
-# Yandex Scraper  (botasaurus anti-bot browser)
+# Human-like behaviour helpers
+# ---------------------------------------------------------------------------
+
+def _human_delay(min_ms: int = 800, max_ms: int = 2200):
+    time.sleep(random.uniform(min_ms / 1000, max_ms / 1000))
+
+def _human_scroll(page, steps: int = 4):
+    for _ in range(steps):
+        delta = random.randint(200, 500)
+        page.evaluate(f"window.scrollBy(0, {delta})")
+        page.wait_for_timeout(random.randint(120, 400))
+
+def _make_camoufox_page(headless: bool):
+    if not CAMOUFOX_AVAILABLE:
+        raise RuntimeError("camoufox is not installed.")
+
+    camoufox_cm = Camoufox(
+        headless=headless,
+        geoip=True,
+        humanize=True,
+        os=random.choice(["windows", "macos", "linux"]),
+        locale="en-US",
+    )
+    browser = camoufox_cm.__enter__()
+    page = browser.new_page(
+        viewport={
+            "width":  random.choice([1280, 1366, 1440, 1920]),
+            "height": random.choice([768,  800,  900,  1080]),
+        }
+    )
+    return camoufox_cm, page
+
+def _run_in_thread(fn, *args, **kwargs):
+    result = [None]
+    exc    = [None]
+    def target():
+        try:
+            result[0] = fn(*args, **kwargs)
+        except Exception as e:
+            exc[0] = e
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join()
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
+# ---------------------------------------------------------------------------
+# Yandex Scraper
 # ---------------------------------------------------------------------------
 
 class YandexScraper:
@@ -220,176 +248,156 @@ class YandexScraper:
         self.config = config
         self.logger = logger
 
-    def scrape_yandex_images(self, keyword: str, images_needed: int) -> list:
-        """Scrape image URLs from Yandex — mirrors proven working logic."""
-        use_headless = self.config.HEADLESS
+    def _browser_session(self, keyword: str, images_needed: int) -> list:
+        # (Browser logic remains identical)
+        image_urls: set = set()
+        camoufox_cm = None
 
-        @browser(
-            reuse_driver=False,
-            block_images=False,
-            headless=use_headless,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            close_on_crash=True
-        )
-        def scrape_task(driver: Driver, search_keyword):
-            try:
-                encoded_keyword = quote(search_keyword)
-                search_url = f"https://yandex.com/images/search?text={encoded_keyword}"
+        try:
+            camoufox_cm, page = _make_camoufox_page(self.config.HEADLESS)
+            encoded_keyword = quote(keyword)
+            search_url = f"https://yandex.com/images/search?text={encoded_keyword}"
+            page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            _human_delay(2500, 5000)
+            scroll_count = 0
 
-                driver.get(search_url)
-                time.sleep(4)
+            with tqdm(total=images_needed, desc="  [Yandex] Scrolling & Scanning",
+                      unit="img", leave=False, ncols=80,
+                      bar_format='{desc}: {n}/{total} found |{bar}| {elapsed}') as scroll_pbar:
 
-                image_urls = set()
-                scroll_count = 0
-                max_scrolls = 20
-
-                with tqdm(total=images_needed, desc="  Scrolling & Scanning",
-                          unit="img", leave=False, ncols=80,
-                          bar_format='{desc}: {n}/{total} found |{bar}| {elapsed}') as scroll_pbar:
-
-                    while len(image_urls) < images_needed * 2 and scroll_count < max_scrolls:
-                        # JS logic to extract URLs 
-                        new_urls = driver.run_js(r"""
-                            function extractImageUrls() {
-                                let urls = new Set();
-
-                                // Strategy 1: Look for links with img_url parameter
-                                document.querySelectorAll('a[href*="img_url"]').forEach(link => {
-                                    try {
-                                        const urlMatch = link.href.match(/img_url=([^&]+)/);
-                                        if (urlMatch) {
-                                            const imgUrl = decodeURIComponent(urlMatch[1]);
-                                            if (imgUrl.startsWith('http') && imgUrl.match(/\.(jpg|jpeg|png|gif|webp)/i)) {
-                                                urls.add(imgUrl);
-                                            }
-                                        }
-                                    } catch(e) {}
-                                });
-
-                                // Strategy 2: Look for all image elements
-                                document.querySelectorAll('img').forEach(img => {
-                                    const src = img.src || img.dataset.src || img.dataset.bem;
-                                    if (src && src.startsWith('http') && !src.includes('data:image')) {
-                                        if (src.length > 60 && !src.includes('avatars.') && !src.includes('yastatic') && !src.includes('favicon')) {
-                                            urls.add(src);
-                                        }
+                while len(image_urls) < images_needed * 2 and scroll_count < self.config.MAX_SCROLLS:
+                    new_urls = page.evaluate(r"""
+                        () => {
+                            const urls = new Set();
+                            document.querySelectorAll('a[href*="img_url"]').forEach(link => {
+                                try {
+                                    const m = link.href.match(/img_url=([^&]+)/);
+                                    if (m) {
+                                        const imgUrl = decodeURIComponent(m[1]);
+                                        if (imgUrl.startsWith('http') && imgUrl.match(/\.(jpg|jpeg|png|gif|webp)/i))
+                                            urls.add(imgUrl);
+                                    }
+                                } catch(e) {}
+                            });
+                            document.querySelectorAll('img').forEach(img => {
+                                const src = img.src || img.dataset.src || img.dataset.bem;
+                                if (src && src.startsWith('http') && !src.includes('data:image')) {
+                                    if (src.length > 60 && !src.includes('avatars.') && !src.includes('yastatic') && !src.includes('favicon'))
+                                        urls.add(src);
+                                }
+                            });
+                            try {
+                                document.querySelectorAll('script').forEach(script => {
+                                    const text = script.textContent;
+                                    if (text && text.includes('http')) {
+                                        const matches = text.match(/https?:\/\/[^"'\s]+\.(jpg|jpeg|png|gif|webp)/gi);
+                                        if (matches)
+                                            matches.forEach(url => {
+                                                if (url.length > 60 && !url.includes('yastatic') && !url.includes('avatars.'))
+                                                    urls.add(url);
+                                            });
                                     }
                                 });
+                            } catch(e) {}
+                            return Array.from(urls);
+                        }
+                    """) or []
 
-                                // Strategy 3: Check for JSON data
-                                try {
-                                    document.querySelectorAll('script').forEach(script => {
-                                        const text = script.textContent;
-                                        if (text && text.includes('http')) {
-                                            const matches = text.match(/https?:\/\/[^"'\s]+\.(jpg|jpeg|png|gif|webp)/gi);
-                                            if (matches) {
-                                                matches.forEach(url => {
-                                                    if (url.length > 60 && !url.includes('yastatic') && !url.includes('avatars.')) {
-                                                        urls.add(url);
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    });
-                                } catch(e) {}
+                    for url in new_urls:
+                        if is_valid_image_url(url):
+                            image_urls.add(url)
 
-                                return Array.from(urls);
-                            }
-                            return extractImageUrls();
+                    scroll_pbar.n = min(len(image_urls), images_needed)
+                    scroll_pbar.refresh()
+                    _human_scroll(page, steps=random.randint(3, 6))
+                    scroll_count += 1
+
+                    try:
+                        page.evaluate("""
+                            const btn = document.querySelector('button.more, .button_more, [class*="show-more"]');
+                            if (btn) btn.click();
                         """)
+                        _human_delay(1500, 3000)
+                    except Exception:
+                        pass
+                    if random.random() < 0.15:
+                        _human_delay(3000, 6000)
+        except Exception as e:
+            print(f"  [Yandex] Browser error: {e}")
+        finally:
+            if camoufox_cm:
+                try:
+                    camoufox_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
 
-                        if new_urls:
-                            for url in new_urls:
-                                if is_valid_image_url(url):
-                                    image_urls.add(url)
+        return list(image_urls)[:images_needed * 2]
 
-                            scroll_pbar.n = min(len(image_urls), images_needed)
-                            scroll_pbar.refresh()
-
-                        driver.run_js("window.scrollBy(0, window.innerHeight);")
-                        time.sleep(1.5)
-                        scroll_count += 1
-
-                        try:
-                            driver.run_js("""
-                                const showMoreBtn = document.querySelector('button.more, .button_more, [class*="show-more"]');
-                                if (showMoreBtn) showMoreBtn.click();
-                            """)
-                            time.sleep(2)
-                        except:
-                            pass
-
-                return list(image_urls)[:images_needed * 2]
-
-            except Exception as e:
-                print(f"  ⚠ Error during scraping: {e}")
-                return []
-
-        return scrape_task(keyword)
+    def scrape_yandex_images(self, keyword: str, images_needed: int) -> list:
+        if not CAMOUFOX_AVAILABLE:
+            return []
+        return _run_in_thread(self._browser_session, keyword, images_needed)
 
     def process_keyword(self, keyword: str):
-        folder = os.path.join(self.config.BASE_DOWNLOAD_DIR,
-                              sanitize_folder(keyword))
+        folder = os.path.join(self.config.BASE_DOWNLOAD_DIR, sanitize_folder(keyword))
         os.makedirs(folder, exist_ok=True)
 
         progress_key = self.logger.get_progress_key(keyword, "yandex")
         existing = self.logger.progress.get(progress_key, 0)
         target = self.config.YANDEX_IMAGES_PER_KEYWORD
 
-        # Re-count from disk to be safe
-        disk_count = count_existing(folder)
-
         if existing >= target:
-            print(f"  [Yandex] ✓ '{keyword}' already complete ({existing}/{target})")
+            print(f"  [Yandex] '{keyword}' already complete ({existing}/{target})")
             return
 
         needed = target - existing
         print(f"  [Yandex] Keyword: {keyword} | Need {needed} more images")
 
         candidates = self.scrape_yandex_images(keyword, needed)
-        if not candidates:
-            print(f"  [Yandex] ⚠ No URLs found for '{keyword}'")
+        
+        # Filter valid candidates before slicing to ensure we have actual targets
+        valid_candidates = [url for url in candidates if is_valid_image_url(url)]
+        target_urls = valid_candidates[:needed] # Isolate exactly what we need
+
+        if not target_urls:
+            print(f"  [Yandex] No URLs found for '{keyword}'")
             return
 
-        print(f"  [Yandex] ✓ {len(candidates)} candidate URLs → downloading")
+        print(f"  [Yandex] {len(target_urls)} candidate URLs -> downloading concurrently")
 
         successful = existing
         attempted = 0
+        state_lock = threading.Lock() # Protects our local counters during multithreading
 
-        with tqdm(total=needed, desc="  [Yandex] Downloading",
-                  unit="", ncols=60,
-                  bar_format="{desc} |{bar}| {n}/{total}") as pbar:
+        def _download_worker(url):
+            nonlocal successful, attempted
+            ext = get_extension(url)
+            
+            # Slight jitter prevents servers from dropping all 10 initial requests simultaneously
+            time.sleep(random.uniform(0.0, 0.5)) 
+            save_path, _ = download_image(url, folder, ext, referer="https://yandex.com/")
 
-            for url in candidates:
-                if successful - existing >= needed:
-                    break
-                if not is_valid_image_url(url):
-                    continue
-
+            with state_lock:
                 attempted += 1
-                ext = get_extension(url)
-                save_path, _ = download_image(url, folder, ext,
-                                              referer="https://yandex.com/")
-
                 if save_path:
                     successful += 1
                     pbar.update(1)
-                    self.logger.log(keyword, "yandex", successful,
-                                   save_path, url, "success")
+                    self.logger.log(keyword, "yandex", successful, save_path, url, "success")
                     self.logger.progress[progress_key] = successful
                     self.logger.save_progress()
                 else:
-                    self.logger.log(keyword, "yandex", attempted,
-                                   "", url, "failed")
+                    self.logger.log(keyword, "yandex", attempted, "", url, "failed")
 
-                time.sleep(self.config.DELAY_BETWEEN_DOWNLOADS)
+        with tqdm(total=needed, desc="  [Yandex] Downloading", unit="", ncols=60, bar_format="{desc} |{bar}| {n}/{total}") as pbar:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.MAX_CONCURRENT_DOWNLOADS) as executor:
+                futures = [executor.submit(_download_worker, url) for url in target_urls]
+                concurrent.futures.wait(futures)
 
-        print(f"  [Yandex] '{keyword}' done: {successful}/{target} images "
-              f"(tried {attempted} URLs)")
+        print(f"  [Yandex] '{keyword}' done: {successful}/{target} images (tried {attempted} URLs)")
 
 
 # ---------------------------------------------------------------------------
-# Pinterest Scraper  (Playwright sync browser)
+# Pinterest Scraper
 # ---------------------------------------------------------------------------
 
 PINTEREST_SIZE_TOKENS = [
@@ -402,13 +410,9 @@ class PinterestScraper:
         self.config = config
         self.logger = logger
 
-    def _collect_urls(self, keyword: str, needed: int) -> list:
-        if not PLAYWRIGHT_AVAILABLE:
-            print("  [Pinterest] Playwright not available — skipping.")
-            return []
-
+    def _browser_session(self, keyword: str, needed: int) -> list:
+        # (Browser logic remains identical)
         found: set = set()
-
         extract_js = r"""
         () => {
             const urls = new Set();
@@ -429,84 +433,67 @@ class PinterestScraper:
                 if (m && m[1].includes('pinimg.com')) urls.add(m[1]);
             });
             document.querySelectorAll('script').forEach(s => {
-                const matches = s.textContent.match(
-                    /https?:\/\/[^\s"']+pinimg\.com\/[^\s"']+\.(jpg|jpeg|png|webp)/gi
-                );
+                const matches = s.textContent.match(/https?:\/\/[^\s"']+pinimg\.com\/[^\s"']+\.(jpg|jpeg|png|webp)/gi);
                 if (matches) matches.forEach(u => urls.add(u));
             });
             return Array.from(urls);
         }
         """
 
+        camoufox_cm = None
         try:
-            with sync_playwright() as pw:
-                browser_instance = pw.chromium.launch(headless=self.config.HEADLESS)
-                ctx = browser_instance.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                               "AppleWebKit/537.36 (KHTML, like Gecko) "
-                               "Chrome/124.0 Safari/537.36",
-                    viewport={"width": 1920, "height": 1080},
-                )
-                page = ctx.new_page()
+            camoufox_cm, page = _make_camoufox_page(self.config.HEADLESS)
+            search_url = f"https://www.pinterest.com/search/pins/?q={quote(keyword)}&rs=typed"
+            page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            _human_delay(3000, 5500)
+            scroll_count = 0
 
-                try:
-                    search_url = (f"https://www.pinterest.com/search/pins/"
-                                  f"?q={quote(keyword)}&rs=typed")
-                    page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                    page.wait_for_timeout(4000)
+            with tqdm(total=needed, desc="    Scanning", unit="img", leave=False, ncols=80, bar_format="{desc}: {n}/{total} found |{bar}| {elapsed}") as pbar:
+                while len(found) < needed * 2 and scroll_count < self.config.MAX_SCROLLS:
+                    raw = page.evaluate(extract_js) or []
+                    for u in raw:
+                        if any(t in u for t in PINTEREST_SIZE_TOKENS[:3]):
+                            continue
+                        for tok in PINTEREST_SIZE_TOKENS:
+                            u = u.replace(tok, "/originals/")
+                        if is_valid_image_url(u):
+                            found.add(u)
 
-                    scroll_count = 0
+                    pbar.n = min(len(found), needed)
+                    pbar.refresh()
+                    _human_scroll(page, steps=random.randint(4, 8))
+                    scroll_count += 1
 
-                    with tqdm(total=needed, desc="    Scanning",
-                              unit="img", leave=False, ncols=80,
-                              bar_format="{desc}: {n}/{total} found |{bar}| {elapsed}") as pbar:
-
-                        while len(found) < needed * 2 and scroll_count < self.config.MAX_SCROLLS:
-                            raw = page.evaluate(extract_js) or []
-
-                            for u in raw:
-                                # Skip small thumbnails
-                                if any(t in u for t in PINTEREST_SIZE_TOKENS[:3]):
-                                    continue
-                                # Upgrade to original size
-                                for tok in PINTEREST_SIZE_TOKENS:
-                                    u = u.replace(tok, "/originals/")
-                                if is_valid_image_url(u):
-                                    found.add(u)
-
-                            pbar.n = min(len(found), needed)
-                            pbar.refresh()
-
-                            page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
-                            page.wait_for_timeout(2000)
-                            scroll_count += 1
-
-                            try:
-                                page.evaluate("""
-                                    const btn = document.querySelector(
-                                        'button[aria-label*="more"], button.more, [class*="show-more"]'
-                                    );
-                                    if (btn) btn.click();
-                                """)
-                                page.wait_for_timeout(1000)
-                            except Exception:
-                                pass
-
-                finally:
                     try:
-                        browser_instance.close()
+                        page.evaluate("""
+                            const btn = document.querySelector('button[aria-label*="more"], button.more, [class*="show-more"]');
+                            if (btn) btn.click();
+                        """)
+                        _human_delay(800, 2000)
                     except Exception:
                         pass
 
+                    if random.random() < 0.15:
+                        _human_delay(3000, 6000)
+
         except Exception as e:
-            print(f"    ⚠ Pinterest browser error: {e}")
-            return []
+            print(f"    Pinterest browser error: {e}")
+        finally:
+            if camoufox_cm:
+                try:
+                    camoufox_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
 
         return list(found)[:needed * 2]
 
+    def _collect_urls(self, keyword: str, needed: int) -> list:
+        if not CAMOUFOX_AVAILABLE:
+            return []
+        return _run_in_thread(self._browser_session, keyword, needed)
+
     def process_keyword(self, keyword: str):
-        folder = os.path.join(self.config.BASE_DOWNLOAD_DIR,
-                              sanitize_folder(keyword))
+        folder = os.path.join(self.config.BASE_DOWNLOAD_DIR, sanitize_folder(keyword))
         os.makedirs(folder, exist_ok=True)
 
         progress_key = self.logger.get_progress_key(keyword, "pinterest")
@@ -514,52 +501,50 @@ class PinterestScraper:
         target = self.config.PINTEREST_IMAGES_PER_KEYWORD
 
         if existing >= target:
-            print(f"  [Pinterest] ✓ '{keyword}' already complete ({existing}/{target})")
+            print(f"  [Pinterest] '{keyword}' already complete ({existing}/{target})")
             return
 
         needed = target - existing
         print(f"  [Pinterest] Keyword: {keyword} | Need {needed} more images")
 
         candidates = self._collect_urls(keyword, needed)
-        if not candidates:
-            print(f"  [Pinterest] ⚠ No URLs found for '{keyword}'")
+        valid_candidates = [url for url in candidates if is_valid_image_url(url)]
+        target_urls = valid_candidates[:needed]
+
+        if not target_urls:
+            print(f"  [Pinterest] No URLs found for '{keyword}'")
             return
 
-        print(f"  [Pinterest] ✓ {len(candidates)} candidate URLs → downloading")
+        print(f"  [Pinterest] {len(target_urls)} candidate URLs -> downloading concurrently")
 
         successful = existing
         attempted = 0
+        state_lock = threading.Lock()
 
-        with tqdm(total=needed, desc="  [Pinterest] Downloading",
-                  unit="", ncols=60,
-                  bar_format="{desc} |{bar}| {n}/{total}") as pbar:
+        def _download_worker(url):
+            nonlocal successful, attempted
+            ext = get_extension(url)
+            
+            time.sleep(random.uniform(0.0, 0.5))
+            save_path, _ = download_image(url, folder, ext, referer="https://www.pinterest.com/")
 
-            for url in candidates:
-                if successful - existing >= needed:
-                    break
-                if not is_valid_image_url(url):
-                    continue
-
+            with state_lock:
                 attempted += 1
-                ext = get_extension(url)
-                save_path, _ = download_image(url, folder, ext,
-                                              referer="https://www.pinterest.com/")
-
                 if save_path:
                     successful += 1
                     pbar.update(1)
-                    self.logger.log(keyword, "pinterest", successful,
-                                   save_path, url, "success")
+                    self.logger.log(keyword, "pinterest", successful, save_path, url, "success")
                     self.logger.progress[progress_key] = successful
                     self.logger.save_progress()
                 else:
-                    self.logger.log(keyword, "pinterest", attempted,
-                                   "", url, "failed")
+                    self.logger.log(keyword, "pinterest", attempted, "", url, "failed")
 
-                time.sleep(self.config.DELAY_BETWEEN_DOWNLOADS)
+        with tqdm(total=needed, desc="  [Pinterest] Downloading", unit="", ncols=60, bar_format="{desc} |{bar}| {n}/{total}") as pbar:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.MAX_CONCURRENT_DOWNLOADS) as executor:
+                futures = [executor.submit(_download_worker, url) for url in target_urls]
+                concurrent.futures.wait(futures)
 
-        print(f"  [Pinterest] '{keyword}' done: {successful}/{target} images "
-              f"(tried {attempted} URLs)")
+        print(f"  [Pinterest] '{keyword}' done: {successful}/{target} images (tried {attempted} URLs)")
 
 
 # ---------------------------------------------------------------------------
@@ -575,13 +560,13 @@ class ImageScraper:
 
     def _print_banner(self, keywords):
         print("\n" + "=" * 70)
-        print("  UNIFIED IMAGE SCRAPER  —  Yandex + Pinterest")
+        print("  UNIFIED IMAGE SCRAPER  --  Yandex + Pinterest")
         print("=" * 70)
-        print(f"  Keywords file             : {self.config.KEYWORDS_FILE}")
-        print(f"  Yandex images/keyword     : {self.config.YANDEX_IMAGES_PER_KEYWORD}")
-        print(f"  Pinterest images/keyword  : {self.config.PINTEREST_IMAGES_PER_KEYWORD}")
-        print(f"  Download directory        : {self.config.BASE_DOWNLOAD_DIR}")
-        print(f"  Total keywords            : {len(keywords)}")
+        print(f"  Keywords file            : {self.config.KEYWORDS_FILE}")
+        print(f"  Yandex images/keyword    : {self.config.YANDEX_IMAGES_PER_KEYWORD}")
+        print(f"  Pinterest images/keyword : {self.config.PINTEREST_IMAGES_PER_KEYWORD}")
+        print(f"  Download directory       : {self.config.BASE_DOWNLOAD_DIR}")
+        print(f"  Total keywords           : {len(keywords)}")
         print("=" * 70 + "\n")
 
     def run(self):
@@ -597,25 +582,22 @@ class ImageScraper:
             print(f"  [Keyword {idx}/{len(keywords)}]  {keyword}")
             print(f"{'='*70}")
 
-            # --- Yandex ---
             try:
                 self.yandex.process_keyword(keyword)
             except Exception as e:
-                print(f"  [Yandex] ✗ Error on '{keyword}': {e}")
-                print(f"  [Yandex]   Skipping to Pinterest…")
+                print(f"  [Yandex] Error on '{keyword}': {e}")
+                print(f"  [Yandex] Skipping to Pinterest...")
 
-            # --- Pinterest ---
             try:
                 self.pinterest.process_keyword(keyword)
             except Exception as e:
-                print(f"  [Pinterest] ✗ Error on '{keyword}': {e}")
-                print(f"  [Pinterest]   Skipping to next keyword…")
+                print(f"  [Pinterest] Error on '{keyword}': {e}")
+                print(f"  [Pinterest] Skipping to next keyword...")
 
             if idx < len(keywords) and self.config.DELAY_BETWEEN_KEYWORDS > 0:
-                print(f"\n  ⏳ Waiting {self.config.DELAY_BETWEEN_KEYWORDS}s…")
+                print(f"\n  Waiting {self.config.DELAY_BETWEEN_KEYWORDS}s...")
                 time.sleep(self.config.DELAY_BETWEEN_KEYWORDS)
 
-        # ----- Summary -----
         print("\n" + "=" * 70)
         print("  DOWNLOAD SUMMARY")
         print("=" * 70)
@@ -623,27 +605,20 @@ class ImageScraper:
         y_target = self.config.YANDEX_IMAGES_PER_KEYWORD
         p_target = self.config.PINTEREST_IMAGES_PER_KEYWORD
         for keyword in keywords:
-            folder = os.path.join(self.config.BASE_DOWNLOAD_DIR,
-                                  sanitize_folder(keyword))
+            folder = os.path.join(self.config.BASE_DOWNLOAD_DIR, sanitize_folder(keyword))
             count = count_existing(folder)
             total += count
             combined_target = y_target + p_target
-            status = ("✓ Complete" if count >= combined_target
-                      else f"⚠ Partial ({count}/{combined_target})")
+            status = ("Complete" if count >= combined_target else f"Partial ({count}/{combined_target})")
             print(f"  {keyword:<40}  {status}")
         print("=" * 70)
         print(f"  Total images downloaded: {total}")
         print("=" * 70 + "\n")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def main():
     scraper = ImageScraper()
     scraper.run()
-
 
 if __name__ == "__main__":
     main()
