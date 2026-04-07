@@ -27,7 +27,7 @@ rule clean_data:
         BASE_DOWNLOAD_DIR,
         "downloads.csv"
     output:
-        "clean_data.log"
+        temp("clean_data.log")
     shell:
         "python DataCleaner.py > clean_data.log"
 
@@ -45,7 +45,7 @@ rule move_files:
     input:
         "selected_images.csv"
     output:
-        "moved_files.log"
+        temp("moved_files.log")
     shell:
         "python MoveFiles.py > moved_files.log"
 
@@ -62,7 +62,7 @@ rule edit_labels:
         "metadata.csv",
         "moved_files.log"
     output:
-        "edited_labels.log"
+        temp("edited_labels.log")
     message:
         "Opening GUI for label editing. Pipeline is paused until you save and close the window."
     shell:
@@ -81,7 +81,7 @@ rule view_dataset:
     input:
         PARQUET_PATH
     output:
-        "viewed_dataset.log"
+        temp("viewed_dataset.log")
     message:
         "Opening GUI for Dataset Viewing. Pipeline is paused until you save and close the window."
     shell:
@@ -101,7 +101,7 @@ rule cleanup:
         os.path.join("..", os.path.basename(str(PARQUET_PATH))),
         "viewed_dataset.log"
     output:
-        "Trash/cleanup.log"
+        temp("Trash/cleanup.log")
     params:
         dl_dir=BASE_DOWNLOAD_DIR,
         ds_dir=DATASET_DIR,
@@ -113,12 +113,8 @@ rule cleanup:
             "progress.json",
             "metadata.csv",
             "selected_images.csv",
-            "clean_data.log",
             "processed_characters.csv",
-            "moved_files.log",
-            "edited_labels.log",
-            "viewed_dataset.log"
-        ]
+            ]
         for f in files_to_move:
             if os.path.exists(f):
                 dest = os.path.join("Trash", f)
