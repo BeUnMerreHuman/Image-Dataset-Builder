@@ -30,27 +30,35 @@ if "%CURRENT_VER%" neq "%PYTHON_VERSION%" (
 
 echo === Setting up environment ===
 pip install -r requirements.txt
-playwright install chromium
-if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+if not exist "%LOCALAPPDATA%\camoufox" (
+    echo Fetching Camoufox binaries...
+    python -m camoufox fetch
+    if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+) else (
+    echo Camoufox binaries already present, skipping fetch.
+)
 
 echo === Creating and opening .env file ===
-echo YANDEX_IMAGES_PER_KEYWORD = 100> .env
-echo PINTEREST_IMAGES_PER_KEYWORD = 50>> .env
-echo.>> .env
-echo #Optinal>> .env
-echo BASE_DOWNLOAD_DIR = images>> .env
-echo DATASET_DIR = dataset>> .env
-echo HAMMING_THRESHOLD = 12>> .env
-echo MIN_WIDTH = 250>> .env
-echo MIN_HEIGHT = 250>> .env
-echo.>> .env
-echo #Extra>> .env
-echo #HEADLESS_MODE=True>> .env
-echo #MAX_RETRIES=3>> .env
-echo #MAX_SCROLLS=30>> .env
-echo #DELAY_BETWEEN_KEYWORDS=3>> .env
-echo #DELAY_BETWEEN_DOWNLOADS=0.5>> .env
-
+if not exist .env (
+    echo YANDEX_IMAGES_PER_KEYWORD = 100> .env
+    echo PINTEREST_IMAGES_PER_KEYWORD = 50>> .env
+    echo.>> .env
+    echo #Optinal>> .env
+    echo BASE_DOWNLOAD_DIR = images>> .env
+    echo DATASET_DIR = dataset>> .env
+    echo HAMMING_THRESHOLD = 12>> .env
+    echo MIN_WIDTH = 250>> .env
+    echo MIN_HEIGHT = 250>> .env
+    echo MAX_CONCURRENT_DOWNLOADS = 10>> .env      
+    echo.>> .env
+    echo #Extra>> .env
+    echo #HEADLESS_MODE=True>> .env
+    echo #MAX_RETRIES=3>> .env
+    echo #MAX_SCROLLS=30>> .env
+    echo #DELAY_BETWEEN_KEYWORDS=3>> .env
+    echo #DELAY_BETWEEN_DOWNLOADS=0.5>> .env
+)
 start /wait notepad .env
 
 echo === Navigating to src\ ===
@@ -58,11 +66,10 @@ cd /d src
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 echo === Creating and opening keywords.txt ===
-type nul > keywords.txt
 start /wait notepad keywords.txt
 
 echo === Starting Snakemake Pipeline ===
-snakemake --cores 1 --forceall
+snakemake --cores 1 --rerun-incomplete
 set SNAKEMAKE_STATUS=%ERRORLEVEL%
 
 echo === Cleaning up temporary files ===
