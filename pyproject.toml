@@ -18,3 +18,5 @@ dependencies = [
     "tqdm==4.67.3",
     "xxhash==3.6.0",
 ]
+[tool.uv]
+link-mode = "copy"
