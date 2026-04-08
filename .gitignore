@@ -1,0 +1,23 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual Environment 
+.venv/
+env/
+venv/
+
+# Secrets and Credentials 
+.env
+
+# Large datasets or local image storage
+src/.snakemake/
+src/Trash/
+*.jpg
+*.png
+*.parquet
+dataset.parquet
+
+# OS specific files
+.DS_Store
+Thumbs.db
