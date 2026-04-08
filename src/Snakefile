@@ -21,7 +21,7 @@ rule download_images:
         temp("progress.json"),
         directory(BASE_DOWNLOAD_DIR)
     shell:
-        "python ImageDownloader.py"
+        "uv run ImageDownloader.py"
 
 rule clean_data:
     input:
@@ -30,7 +30,7 @@ rule clean_data:
     output:
         temp("clean_data.log")
     shell:
-        "python DataCleaner.py {input.data_dir} > clean_data.log"
+        "uv run DataCleaner.py {input.data_dir} > clean_data.log"
 
 rule select_images:
     input:
@@ -41,7 +41,7 @@ rule select_images:
     message:
         "Opening GUI for image selection. Pipeline is paused until you save and close the window."
     shell:
-        "python ImageSelector.py"
+        "uv run ImageSelector.py"
 
 rule move_files:
     input:
@@ -49,7 +49,7 @@ rule move_files:
     output:
         temp("moved_files.log")
     shell:
-        "python MoveFiles.py > moved_files.log"
+        "uv run MoveFiles.py > moved_files.log"
 
 rule create_metadata:
     input:
@@ -59,7 +59,7 @@ rule create_metadata:
     output:
         "metadata.csv" 
     shell:
-        "python MetadataCreator.py"
+        "uv run MetadataCreator.py"
 
 rule edit_labels:
     input:
@@ -70,7 +70,7 @@ rule edit_labels:
     message:
         "Opening GUI for label editing. Pipeline is paused until you save and close the window."
     shell:
-        "python LabelEditor.py > edited_labels.log"
+        "uv run LabelEditor.py > edited_labels.log"
 
 rule build_dataset:
     input:
@@ -79,7 +79,7 @@ rule build_dataset:
     output:
         PARQUET_PATH
     shell:
-        "python DatasetCreator.py"
+        "uv run DatasetCreator.py"
 
 rule clean_parquet:
     input:
@@ -88,7 +88,7 @@ rule clean_parquet:
     output:
         temp("clean_parquet.log")
     shell:
-        "python DataCleaner.py {input.data_dir} > clean_parquet.log"
+        "uv run DataCleaner.py {input.data_dir} > clean_parquet.log"
 
 rule view_dataset:
     input:
@@ -99,7 +99,7 @@ rule view_dataset:
     message:
         "Opening GUI for Dataset Viewing. Pipeline is paused until you save and close the window."
     shell:
-        "python DatasetViewer.py > viewed_dataset.log"
+        "uv run DatasetViewer.py > viewed_dataset.log"
 
 rule export_dataset:
     input:
