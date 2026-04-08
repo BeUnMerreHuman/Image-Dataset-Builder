@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "camoufox[geoip]==0.4.11",
     "imagehash==4.3.2",
+    "msvc-runtime",
     "pandas==3.0.1",
     "pillow==12.1.1",
     "pyarrow==23.0.1",
