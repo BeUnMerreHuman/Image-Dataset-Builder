@@ -37,7 +37,7 @@ class Config:
     MAX_RETRIES             = int(os.getenv("MAX_RETRIES", 3))
     MAX_SCROLLS             = int(os.getenv("MAX_SCROLLS", 30))
     DELAY_BETWEEN_KEYWORDS  = float(os.getenv("DELAY_BETWEEN_KEYWORDS", 3))
-    MAX_CONCURRENT_DOWNLOADS = 10 # Hardcoded to 10 as requested
+    MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", 10))
 
     BLACKLISTED_DOMAINS = {
         "telegram-cdn.org", "telegram.org", "t.me", "cdn.telegram",
@@ -249,7 +249,6 @@ class YandexScraper:
         self.logger = logger
 
     def _browser_session(self, keyword: str, images_needed: int) -> list:
-        # (Browser logic remains identical)
         image_urls: set = set()
         camoufox_cm = None
 
@@ -355,9 +354,8 @@ class YandexScraper:
 
         candidates = self.scrape_yandex_images(keyword, needed)
         
-        # Filter valid candidates before slicing to ensure we have actual targets
         valid_candidates = [url for url in candidates if is_valid_image_url(url)]
-        target_urls = valid_candidates[:needed] # Isolate exactly what we need
+        target_urls = valid_candidates[:needed] 
 
         if not target_urls:
             print(f"  [Yandex] No URLs found for '{keyword}'")
@@ -367,13 +365,12 @@ class YandexScraper:
 
         successful = existing
         attempted = 0
-        state_lock = threading.Lock() # Protects our local counters during multithreading
+        state_lock = threading.Lock() 
 
         def _download_worker(url):
             nonlocal successful, attempted
             ext = get_extension(url)
             
-            # Slight jitter prevents servers from dropping all 10 initial requests simultaneously
             time.sleep(random.uniform(0.0, 0.5)) 
             save_path, _ = download_image(url, folder, ext, referer="https://yandex.com/")
 
@@ -411,7 +408,6 @@ class PinterestScraper:
         self.logger = logger
 
     def _browser_session(self, keyword: str, needed: int) -> list:
-        # (Browser logic remains identical)
         found: set = set()
         extract_js = r"""
         () => {
@@ -582,17 +578,22 @@ class ImageScraper:
             print(f"  [Keyword {idx}/{len(keywords)}]  {keyword}")
             print(f"{'='*70}")
 
-            try:
-                self.yandex.process_keyword(keyword)
-            except Exception as e:
-                print(f"  [Yandex] Error on '{keyword}': {e}")
-                print(f"  [Yandex] Skipping to Pinterest...")
-
-            try:
-                self.pinterest.process_keyword(keyword)
-            except Exception as e:
-                print(f"  [Pinterest] Error on '{keyword}': {e}")
-                print(f"  [Pinterest] Skipping to next keyword...")
+            # -----------------------------------------------------------------
+            # CONCURRENT BROWSER EXECUTION PER KEYWORD
+            # -----------------------------------------------------------------
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                y_future = executor.submit(self.yandex.process_keyword, keyword)
+                p_future = executor.submit(self.pinterest.process_keyword, keyword)
+                
+                try:
+                    y_future.result()
+                except Exception as e:
+                    print(f"  [Yandex] Critical Error on '{keyword}': {e}")
+                    
+                try:
+                    p_future.result()
+                except Exception as e:
+                    print(f"  [Pinterest] Critical Error on '{keyword}': {e}")
 
             if idx < len(keywords) and self.config.DELAY_BETWEEN_KEYWORDS > 0:
                 print(f"\n  Waiting {self.config.DELAY_BETWEEN_KEYWORDS}s...")
