@@ -4,8 +4,8 @@ An end-to-end workflow designed to scrape, curate, and package high-quality imag
 
 ## ✨ Key Features
 
-* **Multi-Source Scraping:** Concurrent scraping from Yandex and Pinterest using **Botasaurus** and **Playwright**.
-* **Orchestrated Workflow:** Powered by **Snakemake** for reproducible, error-resistant data processing.
+* **Multi-Source Scraping:** Concurrent scraping from Yandex and Pinterest using **camoufox**.
+* **Orchestrated Workflow:** Powered by **Snakemake** for reproducible, resumable and error-resistant data processing.
 * **Human-in-the-Loop:** A dedicated **PyQt6 GUI** for rapid manual image selection.
 * **Automated Cleaning:** Built-in deduplication and low-quality image filtering.
 * **High-Performance Storage:** Outputs to **Apache Parquet** for seamless integration with ML frameworks like PyTorch or TensorFlow.
@@ -25,7 +25,8 @@ cd Image-Dataset-Builder
 ```
 
 > [!IMPORTANT]
-> The pipeline will automatically create and open `.env` and `keywords.txt` on every run. Edit and **Save and close** these files to allow the automation to proceed to the scraping phase.
+>The script requires that `uv` be installed and it's PATH configured.
+>The pipeline will automatically create and open `.env` and `keywords.txt` on every run. Edit and **Save and close** these files to allow the automation to proceed to the scraping phase.
 
 ---
 
