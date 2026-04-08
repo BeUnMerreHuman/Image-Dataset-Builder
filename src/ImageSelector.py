@@ -42,7 +42,7 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 class Config:
     IMAGES_DIR    = Path(os.getenv("BASE_DOWNLOAD_DIR", "downloads"))
     SELECTED_CSV  = Path("selected_images.csv")
-    PROCESSED_CSV = Path("processed_characters.csv")
+    PROCESSED_CSV = Path("processed_labels.csv")
 
     THUMB_SIZE        = 150      # px, square
     GRID_COLS         = 5
