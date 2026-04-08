@@ -24,7 +24,8 @@ echo === Fetching Camoufox Binaries ===
 if not exist "%LOCALAPPDATA%\camoufox" (
     uv run python -m camoufox fetch
     if %ERRORLEVEL% neq 0 (
-        echo [ERROR] Failed to fetch Camoufox binaries.
+        echo [ERROR] Failed to fetch Camoufox binaries. 
+        echo Ensure you have Microsoft Visual C++ Redistributable installed and try again.
         pause
         exit /b %ERRORLEVEL%
     )

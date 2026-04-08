@@ -25,7 +25,8 @@ cd Image-Dataset-Builder
 ```
 
 > [!IMPORTANT]
->The script requires that `uv` be installed and it's PATH configured.
+>The script requires that [`uv`](https://pypi.org/project/uv/) and [`Microsoft Visual C++ Redistributable`](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) be installed.
+
 >The pipeline will automatically create and open `.env` and `keywords.txt` on every run. Edit and **Save and close** these files to allow the automation to proceed to the scraping phase.
 
 ---
