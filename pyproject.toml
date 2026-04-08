@@ -1,0 +1,19 @@
+[project]
+name = "imagedatasetbuilder"
+version = "2.0.0"
+description = "An automated Snakemake and .bat-driven workflow that scrapes, cleans, and serializes Yandex and Pinterest imagery into a high-performance Parquet dataset."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "camoufox[geoip]==0.4.11",
+    "imagehash==4.3.2",
+    "pandas==3.0.1",
+    "pillow==12.1.1",
+    "pyarrow==23.0.1",
+    "pyqt6==6.10.2",
+    "python-dotenv==1.2.1",
+    "requests==2.32.5",
+    "snakemake==9.16.3",
+    "tqdm==4.67.3",
+    "xxhash==3.6.0",
+]
