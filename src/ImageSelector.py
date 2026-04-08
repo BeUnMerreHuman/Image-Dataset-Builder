@@ -646,7 +646,7 @@ class SidePanel(QWidget):
         self.save_btn.clicked.connect(self.save_requested)
         lay.addWidget(self.save_btn)
 
-        self.done_btn = QPushButton("🏁  Mark Character Done")
+        self.done_btn = QPushButton("🏁  Mark Category Done")
         self.done_btn.clicked.connect(
             lambda: self.mark_done.emit(self.current_char()))
         lay.addWidget(self.done_btn)
